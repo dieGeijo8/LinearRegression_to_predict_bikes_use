@@ -1,0 +1,439 @@
+---
+title: Progetto per l'esame del corso\:<br>\"Foundations of Probability and Statistics\". 
+author: Diego Bartoli Geijo(887208), Matteo Anedda(886724) 
+date: 5/01/2022
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: cerulean
+    highlight: default
+    css: format.css
+---
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Introduzione {.emphasized}
+Il data set considerato contiene il numero di bici affittate ogni ora dal servizio di bike sharing della città di Seoul, in Corea del Sud. Ogni record corrisponde ad una certa ora di un certo giorno.
+I dati sono stati raccolti dalla prima ora del giorno 01/12/2017 all'ultima del giorno 30/11/2018.<br>
+Sono riportate inoltre la data, alcune informazioni metereologiche, un attributo che indica se il giorno considerato era festivo o no e un altro che indica se il servizio di bike sharing era attivo o no quel giorno.<br>
+L'obiettivo è la previsione del numero di bici da rendere disponibili fissati data e ora.
+
+## Packages e librerie {.emphasized}
+Installiamo i package e importiamo le librerie necessarie.
+
+
+```{r, message=FALSE, warning=FALSE}
+#install.packages('rdetools')
+#install.packages('lubridate')
+#install.packages('rdetools')
+#install.packages('ggplot2')
+#install.packages('Hmisc')
+#install.packages('ggridges')
+#install.packages('hrbrthemes')
+#install.packages("ggcorrplot")
+#install.packages('gridExtra')
+#install.packages('caret')
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(ggridges)
+library(viridis)
+library(ggcorrplot)
+library(gridExtra)
+library(caret)
+```
+
+## Operazioni sul dataset {.emphasized}
+Carichiamo il dataset.<br> 
+Carichiamo gli attributi i cui valori sono stringhe come attributi di tipo factor per poterli trattare come variabili qualitative.
+
+```{r}
+seoul_bikes <- read.csv("SeoulBike.csv", header=TRUE, stringsAsFactors = TRUE)
+```
+
+Da indicazione del fornitore del dataset non sono presenti record con valori nulli, verifichiamo comunque che non ce ne siano.<br>
+
+```{r}
+sum(is.na(seoul_bikes))
+```
+
+Facciamo una veloce analisi degli attributi del dataset per verificare che siano stati caricati correttamente.
+
+```{r}
+str(seoul_bikes)
+```
+
+Gli attributi sono stati caricati correttamente.<br>
+Il numero di bici affittate ogni ora è contenuto nell'attributo 'Rented.Bike.Count'. Abbiamo poi indicazioni temporali quali data e ora, vari indicatori metereologici e la rispettiva stagione. L'attributo 'Holiday' indica se il giorno era festivo o no, l'attributo 'Functioning.Day' indica se il servizio era attivo o no quel giorno. <br> 
+Cambiamo ora i nomi delle colonne affinchè siano più facilmente utilizzabili.
+
+```{r}
+colnames(seoul_bikes) <- c("Date", "Rent_bike","Hour", "Temp", "Hum", "WS", "Vis", 
+                           "DPT", "SR", "RF", "SF", "Seas", "Hol", "FD")
+```
+
+Facciamo un'analisi riassunitva delle distribuzioni degli attributi del dataset.
+
+```{r}
+summary(seoul_bikes)
+```
+
+La variabile 'Date' è una variabile qualitativa con 365 modalità ognuna ripetuta 24 volte e risulta quindi poco utile. Ricaviamo allora da essa il mese e inseriamo i valori ottenuti in una nuova colonna del dataset chiamata 'Month'. Per ora inseriamo la variabile 'Month' come variabile qualitativa.
+
+```{r}
+seoul_bikes[,'Date'] <- as.Date.character(seoul_bikes[,'Date'], format="%d/%m/%Y")
+
+seoul_bikes[,'Month'] <- month(seoul_bikes[,'Date'])
+seoul_bikes[,'Month'] <- as.factor(seoul_bikes[,'Month'])
+str(seoul_bikes)
+```
+
+Dalla variabile 'Date' possiamo ricavare anche il giorno della settimana. Ogni giorno conta 24 record, uno per ogni ora. Distinguiamo i giorni con i numeri da 1 a 7. Il numero 1 è associato al lunedì e gli altri a seguire. Creiamo una lista di lunghezza 24*7 dove gli elementi saranno i numeri da 1 a 7 ripetuti ciascuno 24 volte. La lista parte dal numero 5 poichè il primo giorno di osservazioni era un venerdì. Questa lista rappresenta una settimana di osservazioni. Inseriamo questa lista quante volte possibile in una nuova colonna del dataset chiamata 'Day'. Alla fine di questo processo restano 24 record senza valore per la colonna 'Day'. Quei 24 record vengono riempiti con il valore 5. Per ora inseriamo la variabile 'Day' come variabile qualitativa. 
+
+```{r}
+settimana <- c()
+iter <- list(5,6,7,1,2,3,4)
+for(i in iter){
+  giorno <- rep(i, 24)
+  settimana <- c(settimana, giorno)
+}
+length(settimana)
+
+anno <- c()
+for(i in 1:52){
+  anno <- c(anno, settimana)
+}
+length(anno)
+
+ultimo_giorno <- rep(5, 24)
+anno <- c(anno, ultimo_giorno)
+
+length(anno)
+
+seoul_bikes['Day'] <- anno
+seoul_bikes[, 'Day'] <- as.factor(seoul_bikes[, 'Day'])
+```
+
+```{r}
+str(seoul_bikes)
+```
+
+La colonna FD(Functioning Day) può assumere valori "Yes" o "No", il valore "No" indica che il servizio di bike sharing non è funzionante. Quindi in corrispondenza dei record con valore di 'FD' uguale a "No" il valore di 'Rented_bike' è sempre uguale a 0. Volendo prevedere il numero di bici da rendere disponibili non siamo interessati ai record con valore di FD uguale a "No", quindi li eliminiamo. Successivamente eliminiamo anche la colonna FD poichè ora assume soltanto valori "Yes" e risulta dunque inutile.
+
+```{r}
+seoul_bikes<-seoul_bikes[!(seoul_bikes$FD=="No"), ]
+seoul_bikes <- subset(seoul_bikes, select = - FD)
+```
+
+```{r}
+##cambiamo l'ordine delle variabili, dopo ci sarà utile
+seoul_bikes <- seoul_bikes[ , c("Date", "Rent_bike","Hour", "Temp", "Hum", "WS",
+                                "Vis", "DPT", "SR", "RF", "SF", "Month","Day","Seas", "Hol")]
+str(seoul_bikes)
+```
+
+## Analisi delle variabili {.emphasized}
+Iniziamo con alcune analisi della distribuzione della variabile target "Rent_bike", prima in generale e poi considerando anche altre variabili.
+
+```{r}
+#settiamo alcuni parametri di formattazione dei grafici che utilizzeremo in seguito
+My_theme <- function() {
+   theme(axis.title=element_text(size=16), axis.text=element_text(size=14),
+         legend.title = element_text(size=16), legend.text = element_text(size=14))
+}
+
+My_theme_2 <- function() {
+   theme(axis.title=element_text(size=14), axis.text=element_text(size=12),
+         legend.title = element_text(size=16), legend.text = element_text(size=14))
+}
+```
+
+```{r, fig.width=6, fig.height=6, fig.align = 'center'}
+p <- ggplot(seoul_bikes, aes(y = Rent_bike)) + geom_boxplot() + labs(y="Rent_bike") + 
+       theme(axis.title=element_text(size=16), axis.text=element_text(size=14)) + 
+       theme(axis.text.x = element_blank())
+p
+```
+
+Osserviamo che i valori della distribuzione superiori alla mediana sono molto più dispersi che i valori inferiori. Sono inoltre presenti numerosi outlier superiori. <br>
+Andiamo ora ad analizzare la distribuzione del numero di bici affittate in base alla stagione. Utilizziamo dei violin plot per poter ottenere un'indicazione grafica dell'intera distribuzione e non solo dei valori principali. 
+
+```{r, fig.width=6, fig.height=6, fig.align = 'center'}
+p <- ggplot(seoul_bikes, aes(x=Seas, y=Rent_bike, col=Seas)) + geom_violin(trim=FALSE) + 
+       labs(x="Season", y="Rent_bike") + My_theme()
+p
+```
+
+Per le stagioni Autunno, Primavera ed Estate non individuiamo intervalli dei valori di Rent_bike con una particolare concentrazione di osservazioni, i valori risultano molto distribuiti. Per quanto riguarda la stagione invernale osserviamo una forte concentrazione di osservazioni nell'intervallo da 0 a 300 circa, inoltre i valori sono molto più bassi che per le altre stagioni. <br>
+Continuiamo analizzando l'andamento del numero di bici affittate per ogni mese dell'anno. Utilizziamo quindi la colonna 'Month'.
+
+```{r, fig.width=6, fig.height=6, fig.align = 'center'}
+ggplot(seoul_bikes, aes(x = Rent_bike, y = Month, fill = ..x..)) +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01) +
+  scale_fill_viridis(name = "Rent_bike", option = "C") +
+  labs(title = ' ') +
+   My_theme()
+```
+
+Vengono confermate le impressioni dell'analisi precedente, nei mesi invernali il servizio è utilizzato notevolmente meno. Le osservazioni con i valori più alti di bici utilizzate sono a Maggio e a Giugno.<br>
+Analizziamo ora la distribuzione del numero di bici utilizzate nei vari giorni della settimana. Facciamo riferimento alla colonna 'Day'.<br>
+
+```{r, fig.width=14, fig.height=12, fig.align = 'center'}
+ggplot(data=seoul_bikes, aes(x=Rent_bike, group=Day, fill=Day)) +
+    geom_density(adjust=1.5) +
+    facet_wrap(~Day) +
+    scale_fill_discrete(name = "Day", labels = c("Monday", "Tuesday", "Wednesday", "Thursday", 
+    "Friday", "Saturday", "Sunday")) + theme(axis.text.y = element_blank(), axis.title.y=element_blank(),
+     legend.title = element_text(size=16), legend.text = element_text(size=14), axis.title.x=element_text(size=16))
+```
+
+Osserviamo che per i giorni dal lunedi al sabato la distribuzione è molto simile. La domenica osserviamo un picco più pronunciato per valori piccoli di 'Rent_bike', si ha quindi un maggior numero di osservazioni con valori piccoli di 'Rent_bike'. Questo significa che la domenica vengono normalmente utilizzate meno bici. <br>
+Analizziamo ora la distribuizone del numero di bici affittate per giorni festivi e non festivi. La colonna di riferimento è 'Hol'(Holiday).
+
+```{r, fig.width=6, fig.height=6, fig.align = 'center'}
+p <- ggplot(seoul_bikes, aes(x=Hol, y=Rent_bike, col=Hol)) + geom_violin() + labs(x="Holiday", y="Rent_bike") + 
+      My_theme()
+p
+```
+
+Dai violin plot rappresentati possiamo dedurre che il serivzio di bike sharing è maggiormente utilizzato nei giorni feriali rispetto ai giorni festivi, con valori che arrivano a superare le 3000 bici affittate in un'ora. Ricordiamo comunque che il campione dei giorni feriali è molto superiore a quello dei giorni festivi quindi non possiamo giungere a conclusioni certe. Andiamo ora a studiare l'andamento del numero di bici affittate per ogni ora, facciamo quindi riferimento alla colonna 'Hour'.
+
+```{r}
+##trasformo Hour in factor, passaggio necessario per la realizzazione del seguente grafico
+seoul_bikes[,'Hour'] <- as.factor(seoul_bikes[,'Hour'])
+```
+
+```{r, fig.width=6, fig.height=6, fig.align = 'center'}
+ggplot(seoul_bikes, aes(x = Rent_bike, y = Hour, fill = ..x..)) +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01) +
+  scale_fill_viridis(name = "Rent_bike", option = "C") +
+  labs(title = ' ') +
+  My_theme_2()
+```
+
+Osserviamo che le ore con i valori di bici affittate più alti sono le 8 e poi tra le 18 e le 22, ore vicine agli orari di inizio e fine della giornata lavorativa. Questa osservazione, unita al fatto che il numero di bici affitate è maggiore nei giorni feriali rispetto a quelli festivi e che la domenica vengono utilizzate meno bici, può far suppore che le bici del servizio di bike sharing siano spesso utilizzate dagli abitanit di Seoul per andare e tornare da lavoro. <br>
+
+Andiamo ora ad analizzare le correlazioni tra le variabili numeriche del dataset. Al fine della costruzione del modello di regressione lineare vogliamo individuare le variabili maggiormente correlate con la variabile target e scoprire eventuali correlazioni tra le variabili esplicative. Variabili esplicative fortemente correlate non possono infatti essere inserite contemporaneamente nel modello perchè potrebbero causare problemi di multicollinearità. Proviamo ora ad inserire le variabili 'Month' e 'Day' come variabili quantitative per osservare se potrebbero risultare utili.
+
+```{r}
+##trasformo le variabili factor in integer, passaggio necessario per poter calcolare le correlazioni
+seoul_bikes[,'Hour'] <- as.integer(seoul_bikes[,'Hour'])
+seoul_bikes[,'Month'] <- as.integer(seoul_bikes[,'Month'])
+seoul_bikes[,'Day'] <- as.integer(seoul_bikes[,'Day'])
+```
+
+```{r, fig.height=8, fig.width=8, fig.align = 'center'}
+seoul_cor <- cor(seoul_bikes[2:13])
+
+ggcorrplot(seoul_cor, hc.order = FALSE, type = 'lower', lab = TRUE, title = 'Correlation matrix') + 
+  theme(plot.title = element_text(size=22), legend.title = element_text(size=18), 
+        legend.text = element_text(size=16))
+```
+
+Le variabili maggiormente correlate con la variabile target 'Rent_bike' sono 'Hour' e 'Temp'(Temperature). 'Temp' risulta fortemente correlata con 'DPT'(Dew Point Temperature). 'Month' e 'Day' non risultano utili come variabili quantitative quindi le utilizzeremo come variabili qualitative. <br>
+Visualizziamo graficamente la correlazione tra 'Hour' e 'Rent_bike' e tra 'Temp' e 'Rent_bike'. 
+
+```{r, fig.width=14, fig.height=8, fig.align = 'center'}
+p1 <- ggplot(seoul_bikes, aes(Temp, Rent_bike, colour = Rent_bike)) +
+       geom_point() + My_theme()
+p1 <- p1 + geom_smooth(method = "lm", se = TRUE, color='red')
+
+p2 <- ggplot(seoul_bikes, aes(Hour, Rent_bike, colour = Rent_bike)) +
+       geom_point() + My_theme()
+p2 <- p2 + geom_smooth(method = "lm", se = TRUE, color='red')
+
+grid.arrange(p1, p2, ncol=2)
+```
+
+## Sviluppo e training del modello {.emphasized}
+Procediamo ora alla costruzione del modello. <br>
+Utilizzeremo l'80% dei record del dataset per la fase di training. Il restante 20% lo utilizzeremo per la fase di testing. Dividiamo quindi il dataset iniziale.
+
+```{r}
+set.seed(100)
+
+trainingRowIndex <- sample(1:nrow(seoul_bikes), 0.8*nrow(seoul_bikes))
+seoul_bikes_training <- seoul_bikes[trainingRowIndex, ]  
+
+seoul_bikes_test  <- seoul_bikes[-trainingRowIndex, ]  
+seoul_bikes_test <- seoul_bikes_test
+```
+
+```{r}
+nrow(seoul_bikes)
+nrow(seoul_bikes_test)
+nrow(seoul_bikes_training)
+```
+
+Costruiamo il primo modello. Inseriamo come unica variabile esplicativa 'Temp' che era quella che risultava maggiormente correlata con la variabile target.
+
+```{r}
+seoul.lm <- lm(seoul_bikes_training$Rent_bike ~ seoul_bikes_training$Temp)
+summary(seoul.lm)
+```
+
+Studiamo il grafico dei residui del modello appena costruito per vedere se individuiamo un andamento simile ad una funzione nota. Questo suggerirebbe un nuovo inserimento di 'Temp' nel modello come variabile di tale funzione.
+
+```{r}
+plot(seoul.lm, which = c(1))
+```
+
+Non idiviudiamo un andamento noto. La prossima variabile che andiamo ad inserire è 'Hour' poichè era la seconda più correlata con 'Rent_bike'. Come sopra cerchiamo una funzione che potrebbe rendere più proficuo l'inserimento di 'Hour'.
+
+```{r}
+plot(rstandard(seoul.lm) ~ seoul_bikes_training$Hour)
+```
+
+Non indivudiamo un andamento noto quindi inseriamo 'Hour' come variabile lineare.
+
+```{r}
+seoul.plm <- lm(seoul_bikes_training$Rent_bike ~ seoul_bikes_training$Temp + seoul_bikes_training$Hour)
+summary(seoul.plm)
+```
+
+Procediamo come sopra.
+
+```{r}
+plot(seoul.plm, which = c(1))
+```
+
+Non individuiamo un andamento noto. <br>
+La terza variabile più correlata è 'DPT' ma non la inseriamo perchè è fortemente correlata con 'Temp'. Non inseriamo neanche 'SR'(Solar Radiation) perchè ha una correlazione più forte con 'Temp' che con la variabile target.
+Inseriamo quindi 'Vis'(Visibility), procediamo come sopra.
+
+```{r}
+plot(rstandard(seoul.plm) ~ seoul_bikes_training$Vis)
+```
+
+Non individuiamo un andamento noto, quindi inseriamo 'Vis' come variabile esplicativa lineare.
+
+```{r}
+seoul.plm <- update(seoul.plm, . ~ . + seoul_bikes_training$Vis)
+summary(seoul.plm)
+```
+
+```{r}
+plot(seoul.lm, which = c(1))
+```
+
+Osserviamo che alcuni dei valori generati dal modello sono inferiori a zero. Questi valori sono per forza sbagliati poichè noi vogliamo predirre il numero di bici da rendere disponibili che sarà sempre maggiore o uguale a zero. Per evitare che questo accada costruiamo un modello predittivo per sqrt('Rent_bike') e non più per 'Rent_bike'. In questo modo i valori assunti da 'Rent_bike' dovranno essere per forza numeri postivi poichè il dominio della radice è l'insieme dei numeri reali maggiori di zero.
+
+```{r}
+seoul_sqrt.plm <- update(seoul.plm, sqrt(.) ~ .)
+summary(seoul_sqrt.plm)
+```
+
+```{r}
+plot(seoul_sqrt.plm, which = c(1,2))
+```
+
+Otteniamo un miglioramento dell'indice R^2 e il modello non genera più valori negativi, come previsto. Dal grafico dei quantili teorici di una distribuzione normale contro i residui standardizzati del modello osserviamo che il comportamento del modello è ottimo per valori attorno alla mediana della distribuzione dei residui standardizzati mentre si discosta abbastanza da quello atteso per valori estremi. <br>
+L'ultima variabile quantitativa che potremmo voler inserire è 'Hum'(Humidity) ma risulta fortemente correlata con 'Vis'. Le variabili 'Rf'(Rain fall) e 'WS'(Wind Speed) non le inseriamo perchè hanno una correlazione estremamente bassa con la variabile target. <br>
+Dalle analisi inziali sembra che le variabili qualitative 'Hol'(Holiday) e 'Seas'(Season) abbiano un impatto sul numero di bici affitatte. Decidiamo quindi di inserirle entrambe nel modello.
+
+```{r}
+seoul_sqrt.plm <- update(seoul_sqrt.plm, . ~ . + seoul_bikes_training$Hol + seoul_bikes_training$Seas)
+summary(seoul_sqrt.plm)
+```
+
+```{r}
+plot(seoul_sqrt.plm, which = c(1,2))
+```
+
+Il miglioramento non è particolarmente significativo ma le variabili risultano tutte significative, decidiamo quindi di confermare l'inserimento di entrambe le variabili qualitative nel modello. <br>
+Potremmo provare a togliere l'intercetta per tentare di migliorare il modello ma considerazioni qualitative ci sconsigliano di farlo. Togliere l'intercetta significa infatti supporre che il grafico del nostro modello di regressione passi per l'origine ma possiamo affermare con certezza che questo non è vero. Per 'Hour' uguale a zero abbiamo infatti osservato nelle analisi iniziali che il numero di bici affittate è diverso da zero. <br> 
+Proviamo quindi ad inserire le variabili qualitative 'Month' e 'Day' che dalle analisi iniziali sembravano avere un impatto sul numero di bici affittate.
+
+```{r}
+seoul_bikes_training[,'Month'] <- as.factor(seoul_bikes_training[,'Month'])
+seoul_bikes_training[,'Day'] <- as.factor(seoul_bikes_training[,'Day'])
+
+seoul_sqrt.plm <- update(seoul_sqrt.plm, . ~ . + seoul_bikes_training$Day + seoul_bikes_training$Month)
+summary(seoul_sqrt.plm)
+```
+
+Osserviamo che l'indice R^2 del modello migliora con l'inserimento delle variabili 'Month' e 'Date'. Tuttavia alcuni coefficenti risultano non significativi e alcuni hanno valore NA. Questo può essere dovuto a problemi di collinearità o di ridondanza di informazione. Viste queste problematiche nella fase di testing testeremo sia il modello con le variabili 'Month' e 'Day' che quello senza.
+
+## Testing del modello {.emphasized}
+Passiamo ora alla fase di testing. Prima verificheremo che il modello non presenti problemi di over fitting tramite la tecnica della k-cross validation. Successivamente verificheremo le prestazioni del modello con un indice costruito da noi. <br>
+Nella fase della k-cross validation l'indice R^2 sarà calcolato considerando come variabile target sqrt(Rent_bike) per limitazioni della funzione di R per la k-cross validation. Per valutare le prestazioni considereremo i valori di 'Rent_bike' poichè quelli sono i valori che realmente vogliamo predirre. <br>
+Iniziamo dalla k-cross validation. Come detto prima studiamo sia il modello con le variabili 'Month e 'Day' che quello senza tali variabili. Poiché lavoriamo con la k-cross validation possiamo considerare l'intero dataset e non solo la parte utilizzata per il training.
+
+```{r}
+seoul_bikes[,'Month'] <- as.factor(seoul_bikes[,'Month'])
+seoul_bikes[,'Day'] <- as.factor(seoul_bikes[,'Day'])
+```
+
+```{r}
+set.seed(125)
+ 
+train_control <- trainControl(method = "repeatedcv",
+                              number = 10, repeats = 3)
+ 
+seoul_sqrt.plm_kval <- train(sqrt(Rent_bike) ~ Hour + Temp + Vis + Hol + Seas, data = seoul_bikes,
+               method = "lm",
+               trControl = train_control)
+ 
+print(seoul_sqrt.plm_kval)
+```
+
+```{r}
+set.seed(125)
+
+train_control <- trainControl(method = "repeatedcv",
+                              number = 10, repeats = 3)
+ 
+options(warn=-1)  
+seoul_sqrt.plm_kval <- train(sqrt(Rent_bike) ~ Hour + Temp + Vis + Hol + Seas + Month + Date, data = seoul_bikes,
+               method = "lm",
+               trControl = train_control)
+
+print(seoul_sqrt.plm_kval)
+```
+
+Osserviamo che anche con la k-cross validation il modello con le variabili 'Month' e 'Day' mantiene un indice R^2 migiliore, inoltre il peggioramento rispetto all'indice R^2 calcolato senza la k-cross validation è pressoché uguale tra i 2 modelli. Scegliamo quindi il modello con 'Month' e 'Day' e procediamo alla fase di valutazione delle prestazioni. In questa fase utilizzeremo il 20% del dataset precedentemente riservato alla fase di testing.<br>
+Costruiamo un vettore contenente le differenze, in valore assoluto e arrotondate, tra il numero di bici affittate e il valore predetto dal modello per ogni record. Gli elementi di tale vettore rappresentano quindi gli errori del modello. Costruiamo poi un secondo vettore di lunghezza pari al primo. Un elemento di questo secondo vettore è uguale a 1 se il corrispondente elemento del vettore delle differenze è minore o uguale al trentesimo percentile della distribuzione di 'Rent_bike', 0 altrimenti. Il nostro indice di prestazione sarà il rapporto tra il numero di 1 e il numero di elementi totali di questo vettore. Scegliamo come soglia di errore il trentesimo percentile della distribuzione di 'Rent_bike' perchè riteniamo che se l'errore nella previsione è inferiore a tale soglia, tale errore può essere considerato 'piccolo' per le dimensioni dei numeri con cui si sta lavorando. 
+
+```{r}
+seoul_bikes_training[,'Month'] <- as.factor(seoul_bikes_training[,'Month'])
+seoul_bikes_training[,'Day'] <- as.factor(seoul_bikes_training[,'Day'])
+seoul_bikes_test[,'Month'] <- as.factor(seoul_bikes_test[,'Month'])
+seoul_bikes_test[,'Day'] <- as.factor(seoul_bikes_test[,'Day'])
+
+seoul_sqrt.plm <- lm(sqrt(Rent_bike) ~ Hour + Temp + Vis + Hol + Seas + Month + Date, data = seoul_bikes_training)
+```
+
+```{r}
+model_values <- predict(seoul_sqrt.plm, seoul_bikes_test)
+model_values <- round(model_values, digits = 0) 
+
+differenze <- (abs(seoul_bikes_test$Rent_bike - model_values^2))
+
+prestazioni <- c()
+num_1=0
+num_0=0
+
+for(i in 1:length(model_values)){
+
+  if(differenze[i] <= quantile(seoul_bikes_test$Rent_bike, 0.3)){
+    prestazioni[i]=1
+    num_1 = num_1 + 1
+  } else{
+    prestazioni[i]=0
+    num_0 = num_0 + 1
+  }
+}
+
+print(num_1/(num_1 + num_0))
+```
+
+## Conclusioni {.emphasized}
+Le prestazioni del modello sono soddisfacenti ma migliorabili.<br> Rimangono inutilizzate diverse variabili atmosferiche del dataset iniziale. Per migliorare il modello potrebbe risultare utile una classificazione basata su tali variabili per costruire una nuova variabile che aggregasse le condizioni atmosferiche.<br>
+Sarebbe inoltre utile avere dei costi degli errori per poter sviluppare una valutazione delle prestazioni più specifica. Possiamo supporre ad esempio che fornire meno bici di quelle necessarie sia un errore più grave rispetto al fornirne di più.
